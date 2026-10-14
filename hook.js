@@ -1,8 +1,11 @@
 "use strict";
 
-// Plain-object versions of aiserver.v1.AvailableModelsResponse.AvailableModel. The protobuf
-// class silently drops keys it does not know, so test/models.test.js round-trips these
-// through Cursor's real message class to catch renamed or removed fields.
+// Entry point of the anysphere.cursor-always-local override (install.sh copies it to
+// node_modules/hook/dist/main.js). It runs as cursor-always-local itself, so require("vscode")
+// returns the same API object the real extension gets: patch it, then load the real code.
+
+const path = require("path");
+const vscode = require("vscode");
 
 const EFFORTS = [
   { value: "low", displayName: "Low", label: "low" },
@@ -11,8 +14,7 @@ const EFFORTS = [
   { value: "xhigh", displayName: "Extra High", label: "extra high" },
   { value: "max", displayName: "Max", label: "max" },
 ];
-const DEFAULT_EFFORT = EFFORTS.find((effort) => effort.value === "high");
-
+const DEFAULT_EFFORT = EFFORTS[2];
 const CONTEXT_200K = { value: "200k", displayName: "200K", tokens: 200000 };
 const CONTEXT_300K = { value: "300k", displayName: "300K", tokens: 300000 };
 const CONTEXT_1M = { value: "1m", displayName: "1M", tokens: 1000000 };
@@ -56,9 +58,8 @@ const MODEL_SPECS = [
   },
 ];
 
-// Injected models go right before this entry, or at FALLBACK_INSERT_INDEX when it is absent.
+// Injected models go right before this entry, or at index 4 when it is missing.
 const INSERT_BEFORE_MODEL = "gpt-5.6-sol";
-const FALLBACK_INSERT_INDEX = 4;
 
 function tooltip(markdownContent) {
   return {
@@ -77,11 +78,7 @@ function booleanParameter(id, name, markdownTooltip, enabledValue) {
     id,
     name,
     markdownTooltip,
-    parameterType: {
-      booleanParameter: {
-        values: [{ value: "false" }, { value: "true", ...enabledValue }],
-      },
-    },
+    parameterType: { booleanParameter: { values: [{ value: "false" }, { value: "true", ...enabledValue }] } },
     isCycleableByHotkey: false,
   };
 }
@@ -95,12 +92,7 @@ function contextParameter(base) {
       enumParameter: {
         values: [
           { value: base.value, displayName: base.displayName, modelPickerBadges: [] },
-          {
-            value: CONTEXT_1M.value,
-            displayName: CONTEXT_1M.displayName,
-            increasesModelCost: true,
-            modelPickerBadges: [],
-          },
+          { value: CONTEXT_1M.value, displayName: CONTEXT_1M.displayName, increasesModelCost: true, modelPickerBadges: [] },
         ],
       },
     },
@@ -114,11 +106,7 @@ function effortParameter() {
     markdownTooltip: "Effort the model uses to generate its response.",
     parameterType: {
       enumParameter: {
-        values: EFFORTS.map((effort) => ({
-          value: effort.value,
-          displayName: effort.displayName,
-          modelPickerBadges: [],
-        })),
+        values: EFFORTS.map((effort) => ({ value: effort.value, displayName: effort.displayName, modelPickerBadges: [] })),
       },
     },
     isCycleableByHotkey: true,
@@ -135,12 +123,7 @@ function buildVariant(spec, { thinking, context, effort, fast }) {
     parameterValues.push({ id: "fast", value: String(fast) });
   }
 
-  const label = [
-    context.isMaxMode ? context.displayName : "",
-    effort.displayName,
-    thinking ? "Thinking" : "",
-    fast ? "Fast" : "",
-  ]
+  const label = [context.isMaxMode ? context.displayName : "", effort.displayName, thinking ? "Thinking" : "", fast ? "Fast" : ""]
     .filter(Boolean)
     .join(" ");
   const displayName = `${spec.title} <span style="color: var(--cursor-text-tertiary);">${label}</span>`;
@@ -163,6 +146,8 @@ function buildVariant(spec, { thinking, context, effort, fast }) {
   };
 }
 
+// Plain-object aiserver.v1.AvailableModelsResponse.AvailableModel; the protobuf class silently
+// drops keys it does not know, so field names must match Cursor's schema exactly.
 function buildModel(spec) {
   const contexts = [
     { ...spec.context, isMaxMode: false },
@@ -178,11 +163,8 @@ function buildModel(spec) {
       }
     }
   }
-
   const summary = (context) =>
-    tooltip(
-      `**${spec.title}**<br />${spec.description}<br /><br />${context.displayName} context window<br /><br />*Version: ${DEFAULT_EFFORT.label} effort*`
-    );
+    tooltip(`**${spec.title}**<br />${spec.description}<br /><br />${context.displayName} context window<br /><br />*Version: ${DEFAULT_EFFORT.label} effort*`);
 
   return {
     name: spec.id,
@@ -204,18 +186,11 @@ function buildModel(spec) {
     supportsSandboxing: true,
     inputboxShortModelName: spec.title,
     parameterDefinitions: [
-      ...(spec.thinking
-        ? [booleanParameter("thinking", "Thinking", "Enable extended thinking before responding.", { displayName: "Thinking" })]
-        : []),
+      ...(spec.thinking ? [booleanParameter("thinking", "Thinking", "Enable extended thinking before responding.", { displayName: "Thinking" })] : []),
       contextParameter(spec.context),
       effortParameter(),
       ...(spec.fast
-        ? [
-            booleanParameter("fast", "Fast", "Significantly faster priority processing.", {
-              displayName: "Fast",
-              increasesModelCost: true,
-            }),
-          ]
+        ? [booleanParameter("fast", "Fast", "Significantly faster priority processing.", { displayName: "Fast", increasesModelCost: true })]
         : []),
     ],
     variants,
@@ -229,14 +204,83 @@ function buildModel(spec) {
   };
 }
 
-function buildInjectedModels() {
-  return MODEL_SPECS.map(buildModel);
+let channel;
+try {
+  channel = vscode.window.createOutputChannel("Cursor Opus Hack", { log: true });
+} catch {
+  channel = undefined;
 }
 
-module.exports = {
-  MODEL_SPECS,
-  INSERT_BEFORE_MODEL,
-  FALLBACK_INSERT_INDEX,
-  buildModel,
-  buildInjectedModels,
-};
+function log(level, message) {
+  if (channel && channel[level]) {
+    channel[level](message);
+  }
+}
+
+let lastLine;
+
+function injectModels(method, message) {
+  if (!message || !Array.isArray(message.models) || typeof method.O !== "function") {
+    return;
+  }
+  const serverCount = message.models.length;
+  const returned = new Set(message.models.map((model) => model && model.name));
+  // Built fresh for every response: the protobuf constructor keeps references to repeated scalar arrays.
+  const missing = MODEL_SPECS.filter((spec) => !returned.has(spec.id)).map(buildModel);
+
+  if (missing.length > 0) {
+    const built = new method.O({ models: missing }).models;
+    let index = message.models.findIndex((model) => model && model.name === INSERT_BEFORE_MODEL);
+    if (index < 0) {
+      index = Math.min(4, serverCount);
+    }
+    message.models.splice(index, 0, ...built);
+    if (Array.isArray(message.modelNames)) {
+      message.modelNames.push(...built.map((model) => model.name).filter((name) => !message.modelNames.includes(name)));
+    }
+  }
+
+  const summary = missing.length > 0 ? `injected ${missing.map((model) => model.name).join(", ")}` : "server already returned every injected model";
+  const line = `AvailableModels: server returned ${serverCount} models; ${summary}`;
+  // The model list refreshes every few minutes; only log when the outcome changes.
+  if (line !== lastLine) {
+    lastLine = line;
+    log("info", line);
+  }
+}
+
+function wrapProvider(provider) {
+  if (!provider || typeof provider.unary !== "function") {
+    return provider;
+  }
+  const unary = provider.unary;
+  provider.unary = async function (service, method) {
+    const response = await unary.apply(provider, arguments);
+    if (method && method.name === "AvailableModels") {
+      try {
+        injectModels(method, response && response.message);
+      } catch (error) {
+        log("error", `Failed to inject models: ${(error && error.stack) || error}`);
+      }
+    }
+    return response;
+  };
+  log("info", "Wrapped the connect transport provider");
+  return provider;
+}
+
+try {
+  const register = vscode.cursor.registerConnectTransportProvider;
+  // Cursor defines vscode.cursor.* as configurable but not writable, so plain assignment fails.
+  Object.defineProperty(vscode.cursor, "registerConnectTransportProvider", {
+    value: (provider) => register.call(vscode.cursor, wrapProvider(provider)),
+    configurable: true,
+    enumerable: true,
+    writable: true,
+  });
+  log("info", "Patched vscode.cursor.registerConnectTransportProvider");
+} catch (error) {
+  log("error", `Failed to patch vscode.cursor: ${(error && error.stack) || error}`);
+}
+
+module.exports = require(path.join(__dirname, "..", "..", "..", "dist", "main.js"));
