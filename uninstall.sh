@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Removes the override installed by install.sh so Cursor goes back to its built-in cursor-always-local.
+# Removes the LaunchAgent and the override installed by install.sh, so Cursor goes back to its
+# built-in cursor-always-local.
 set -euo pipefail
+
+LABEL="com.yzs-lab.cursor-opus-hack"
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 
 APP="${CURSOR_APP:-/Applications/Cursor.app}"
 if [ ! -x "$APP/Contents/MacOS/Cursor" ]; then

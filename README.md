@@ -22,7 +22,24 @@
 
 Cursor 会记住每个模型上次用的参数（例如 Opus 5.5 的 `1M · Max · Fast`），模型回到列表后自动沿用。
 
-**Cursor 每次升级后都要重新运行 `./install.sh`。** 升级会换掉内置扩展的 `dist/*.js`，覆盖目录里的旧拷贝会校验失败，Cursor 就不会加载 `cursor-always-local`，它的功能（包括模型列表的请求通道）都会失效。
+## Cursor 升级后自动重装
+
+Cursor 每次升级都会换掉内置扩展的 `dist/*.js`，例如 3.25.6 多了一个 `dist/254.js`。覆盖目录里的旧拷贝因此校验失败，而 Cursor 不会退回内置版本，`cursor-always-local` 直接不加载，模型请求就没有通道可走（远端窗口里表现为 `No Connect transport provider registered`，请求一直卡住）。
+
+所以 `install.sh` 会顺带注册一个 LaunchAgent（`~/Library/LaunchAgents/com.yzs-lab.cursor-opus-hack.plist`），由它运行 `watch.sh`：
+
+- **触发时机：** `/Applications` 目录一有变化就触发，另外每 5 分钟检查一次。Cursor 升级时，ShipIt 会把新的 `Cursor.app` 整个换进 `/Applications`，这一步正好会触发。
+- **检查内容：** 比较内置扩展和覆盖目录的 `dist`。两边一致就直接退出，不一致就重新运行 `install.sh`，并弹一条系统通知。
+
+ShipIt 换完应用后大约 4 秒会重新打开 Cursor，大约 10 秒后 Cursor 才会校验这个扩展，而重装只要 1 秒左右，通常赶得上。如果没赶上（比如通知弹出时 Cursor 已经打开，模型却用不了），执行一次 `Developer: Reload Window` 即可。
+
+只有重装时才会写日志，日志在 `~/Library/Logs/cursor_opus_hack.log`。查看 LaunchAgent 的状态：
+
+```bash
+launchctl print gui/$(id -u)/com.yzs-lab.cursor-opus-hack
+```
+
+LaunchAgent 里记的是项目目录的绝对路径，移动项目目录后要重新运行一次 `./install.sh`。
 
 ## 卸载
 
@@ -30,7 +47,7 @@ Cursor 会记住每个模型上次用的参数（例如 Opus 5.5 的 `1M · Max 
 ./uninstall.sh
 ```
 
-Reload Window 后恢复为内置版本。
+会删除 LaunchAgent 和覆盖目录。Reload Window 后恢复为内置版本。
 
 ## 日志
 
