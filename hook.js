@@ -249,6 +249,31 @@ function injectModels(method, message) {
   }
 }
 
+function injectResponse(service, method, response) {
+  const message = response && response.message;
+  if (message && Array.isArray(message.models)) {
+    injectModels(method, message);
+    return;
+  }
+
+  // Cursor 3.26 passes RawBytesPreEncodedMessage as method.I/O to avoid decoding in the
+  // extension bridge. The service still carries the real protobuf descriptor. Decode only
+  // this response, inject using that schema, then restore the bridge's original message type.
+  const descriptor = Object.values((service && service.methods) || {}).find((entry) => entry.name === method.name);
+  if (!message || typeof message.toBinary !== "function" || !descriptor ||
+      typeof descriptor.O !== "function" || typeof descriptor.O.fromBinary !== "function" ||
+      typeof method.O !== "function" || typeof method.O.fromBinary !== "function" ||
+      descriptor.O === method.O) {
+    throw new Error("Unsupported AvailableModels response shape; cannot resolve the protobuf descriptor");
+  }
+  const decoded = descriptor.O.fromBinary(message.toBinary());
+  if (!Array.isArray(decoded.models)) {
+    throw new Error("AvailableModels protobuf descriptor does not expose a model list");
+  }
+  injectModels(descriptor, decoded);
+  response.message = method.O.fromBinary(decoded.toBinary());
+}
+
 function wrapProvider(provider) {
   if (!provider || typeof provider.unary !== "function") {
     return provider;
@@ -256,9 +281,9 @@ function wrapProvider(provider) {
   const unary = provider.unary;
   provider.unary = async function (service, method) {
     const response = await unary.apply(provider, arguments);
-    if (method && method.name === "AvailableModels") {
+    if (service && service.typeName === "aiserver.v1.AiService" && method && method.name === "AvailableModels") {
       try {
-        injectModels(method, response && response.message);
+        injectResponse(service, method, response);
       } catch (error) {
         log("error", `Failed to inject models: ${(error && error.stack) || error}`);
       }

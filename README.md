@@ -59,6 +59,22 @@ LaunchAgent 里记的是项目目录的绝对路径，移动项目目录后要�
 [info] AvailableModels: server returned 30 models; injected claude-opus-5-5, claude-sonnet-5-5, claude-opus-5, claude-opus-4-8
 ```
 
+## 新版响应兼容
+
+Cursor 3.26.13 的扩展桥接把 `method.I/O` 替换成 `RawBytesPreEncodedMessage`，响应不再直接暴露 `models`。旧 hook 因此会静默跳过注入，即使扩展校验通过、transport 正常注册，Claude 也不会显示。
+
+hook 现在从 `service.methods` 找到真实的 protobuf 输出类型，仅解码 `aiserver.v1.AiService.AvailableModels`，注入后再封装回原始字节类型。旧版对象响应仍然支持，服务端配置与未知 protobuf 字段保留。`CppService.AvailableModels` 属于 Tab 补全，不注入 Claude。
+
+## 测试
+
+在安装了 Cursor 和 Node.js 的 macOS 上运行：
+
+```bash
+node --test tests/hook.test.js
+```
+
+测试直接读取当前 Cursor 的真实 protobuf 定义和自带运行时，无需安装依赖、启动 Cursor 或联网，覆盖对象/字节响应、重复刷新、未知字段保留、同名 RPC 隔离及失败透传。Cursor 不在默认位置时可设置 `CURSOR_APP`。
+
 ## 修改模型
 
 改 `hook.js` 里的 `MODEL_SPECS`，然后重新运行 `./install.sh` 并 Reload Window。字段名必须和 Cursor 的 protobuf 定义一致，写错的字段会被静默丢弃。
