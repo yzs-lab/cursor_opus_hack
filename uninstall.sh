@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Removes the LaunchAgent and the override installed by install.sh, so Cursor goes back to its
-# built-in cursor-always-local.
+# Remove the LaunchAgent and the local extension installed by install.sh.
 set -euo pipefail
 
 LABEL="com.yzs-lab.cursor-opus-hack"
@@ -36,5 +35,5 @@ if (fs.existsSync(registry)) {
 }
 fs.rmSync(cache, { force: true });
 
-console.log("在 Cursor 里按 Cmd+Shift+P 执行 Developer: Reload Window 后恢复为内置版本。");
+console.log("在 Cursor 里按 Cmd+Shift+P 执行 Developer: Reload Window 后使用内置扩展。");
 EOF

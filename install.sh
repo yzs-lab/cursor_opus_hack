@@ -20,10 +20,15 @@ const { pathToFileURL } = require("url");
 const [app, hook] = process.argv.slice(2);
 const id = "anysphere.cursor-always-local";
 const hookMain = "node_modules/hook/dist/main.js";
-const source = path.join(app, "Contents/Resources/app/extensions/cursor-always-local");
+const appRoot = path.join(app, "Contents/Resources/app");
+const source = path.join(appRoot, "extensions/cursor-always-local");
 const extensionsDir = path.join(os.homedir(), ".cursor/extensions");
 const registry = path.join(extensionsDir, "extensions.json");
 const cache = path.join(os.homedir(), "Library/Application Support/Cursor/CachedProfilesData/__default__profile__/extensions.user.cache");
+
+// Generate and validate the model schema before updating the existing installation.
+const { generateResponseModule } = require(path.join(path.dirname(hook), "schema.js"));
+const modelSchema = generateResponseModule(appRoot);
 
 // A user-folder copy replaces the built-in extension only when its version is strictly higher.
 const manifest = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
@@ -31,15 +36,15 @@ const [major, minor, patch] = manifest.version.split(".").map(Number);
 const version = `${major}.${minor}.${patch + 1}`;
 const target = path.join(extensionsDir, `${id}-${version}`);
 
-// Copied byte for byte: Cursor checks dist/*.js against hashes of its own build before loading
-// the extension, and skips node_modules, which is where the hook goes. The copy is built aside
-// and renamed into place because this may run while Cursor is starting up.
+// Copy the bundled extension byte for byte, with hook and schema under node_modules.
+// Stage the complete copy separately and atomically rename it into place.
 fs.mkdirSync(extensionsDir, { recursive: true });
 const staging = path.join(extensionsDir, `.${id}-staging-${process.pid}`);
 fs.rmSync(staging, { recursive: true, force: true });
 fs.cpSync(source, staging, { recursive: true });
 fs.mkdirSync(path.join(staging, path.dirname(hookMain)), { recursive: true });
 fs.copyFileSync(hook, path.join(staging, hookMain));
+fs.writeFileSync(path.join(staging, path.dirname(hookMain), "available-models.js"), modelSchema);
 fs.writeFileSync(path.join(staging, "package.json"), JSON.stringify({ ...manifest, version, main: `./${hookMain}` }, null, 2));
 
 for (const name of fs.readdirSync(extensionsDir)) {
@@ -85,13 +90,13 @@ fs.rmSync(cache, { force: true });
 console.log(`内置 ${id} 是 ${manifest.version}，已安装覆盖版本 ${version}：${target}`);
 EOF
 
-# watch.sh calls this script from inside the LaunchAgent; reloading the agent there would kill it.
+# The watcher uses the existing LaunchAgent; standalone installs also register it.
 if [ -z "${CURSOR_OPUS_HACK_WATCHER:-}" ]; then
   LABEL="com.yzs-lab.cursor-opus-hack"
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
   LOG="$HOME/Library/Logs/cursor_opus_hack.log"
   mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")"
-  # Fires when /Applications changes (ShipIt swaps Cursor.app in), plus every 5 minutes as a fallback.
+  # Check when the application directory changes and every 5 minutes.
   cat > "$PLIST.tmp" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

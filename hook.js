@@ -1,8 +1,7 @@
 "use strict";
 
-// Entry point of the anysphere.cursor-always-local override (install.sh copies it to
-// node_modules/hook/dist/main.js). It runs as cursor-always-local itself, so require("vscode")
-// returns the same API object the real extension gets: patch it, then load the real code.
+// Entry point for the local anysphere.cursor-always-local extension, installed at
+// node_modules/hook/dist/main.js. Wrap the shared Cursor API, then load the bundled extension.
 
 const path = require("path");
 const vscode = require("vscode");
@@ -146,8 +145,8 @@ function buildVariant(spec, { thinking, context, effort, fast }) {
   };
 }
 
-// Plain-object aiserver.v1.AvailableModelsResponse.AvailableModel; the protobuf class silently
-// drops keys it does not know, so field names must match Cursor's schema exactly.
+// Build a plain-object aiserver.v1.AvailableModelsResponse.AvailableModel using
+// field names from the current Cursor protobuf schema.
 function buildModel(spec) {
   const contexts = [
     { ...spec.context, isMaxMode: false },
@@ -225,7 +224,7 @@ function injectModels(method, message) {
   }
   const serverCount = message.models.length;
   const returned = new Set(message.models.map((model) => model && model.name));
-  // Built fresh for every response: the protobuf constructor keeps references to repeated scalar arrays.
+  // Build fresh model definitions and repeated scalar arrays for each response.
   const missing = MODEL_SPECS.filter((spec) => !returned.has(spec.id)).map(buildModel);
 
   if (missing.length > 0) {
@@ -256,15 +255,16 @@ function injectResponse(service, method, response) {
     return;
   }
 
-  // Cursor 3.26 passes RawBytesPreEncodedMessage as method.I/O to avoid decoding in the
-  // extension bridge. The service still carries the real protobuf descriptor. Decode only
-  // this response, inject using that schema, then restore the bridge's original message type.
-  const descriptor = Object.values((service && service.methods) || {}).find((entry) => entry.name === method.name);
-  if (!message || typeof message.toBinary !== "function" || !descriptor ||
-      typeof descriptor.O !== "function" || typeof descriptor.O.fromBinary !== "function" ||
-      typeof method.O !== "function" || typeof method.O.fromBinary !== "function" ||
-      descriptor.O === method.O) {
-    throw new Error("Unsupported AvailableModels response shape; cannot resolve the protobuf descriptor");
+  // Decode raw byte responses with the service schema or the schema generated at installation.
+  // Serialize the updated model list using the bridge's original message wrapper.
+  if (!message || typeof message.toBinary !== "function" ||
+      typeof method.O !== "function" || typeof method.O.fromBinary !== "function") {
+    throw new Error("Unsupported AvailableModels response shape; cannot restore the protobuf wrapper");
+  }
+  let descriptor = Object.values((service && service.methods) || {}).find((entry) => entry && entry.name === method.name);
+  if (!descriptor || typeof descriptor.O !== "function" ||
+      typeof descriptor.O.fromBinary !== "function" || descriptor.O === method.O) {
+    descriptor = { ...method, O: require("./available-models.js") };
   }
   const decoded = descriptor.O.fromBinary(message.toBinary());
   if (!Array.isArray(decoded.models)) {
@@ -296,7 +296,7 @@ function wrapProvider(provider) {
 
 try {
   const register = vscode.cursor.registerConnectTransportProvider;
-  // Cursor defines vscode.cursor.* as configurable but not writable, so plain assignment fails.
+  // Define the Cursor API wrapper through a configurable property descriptor.
   Object.defineProperty(vscode.cursor, "registerConnectTransportProvider", {
     value: (provider) => register.call(vscode.cursor, wrapProvider(provider)),
     configurable: true,
