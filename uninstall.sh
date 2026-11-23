@@ -2,15 +2,22 @@
 # Remove the LaunchAgent and the local extension installed by install.sh.
 set -euo pipefail
 
-LABEL="com.yzs-lab.cursor-opus-hack"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
-
 APP="${CURSOR_APP:-/Applications/Cursor.app}"
 if [ ! -x "$APP/Contents/MacOS/Cursor" ]; then
   echo "找不到 $APP，可以用 CURSOR_APP=/path/to/Cursor.app ./uninstall.sh 指定" >&2
   exit 1
 fi
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="$(command -v python3)" || { echo "需要 Python 3（仅使用标准库 sqlite3）。" >&2; exit 1; }
+
+# Check before stopping the watcher or removing files. Stop the watcher before
+# revoking the exception so it cannot restore trust during uninstall.
+"$PYTHON" "$HERE/signature-overrides.py" uninstall --app "$APP" --dry-run
+
+LABEL="com.yzs-lab.cursor-opus-hack"
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+"$PYTHON" "$HERE/signature-overrides.py" uninstall --app "$APP"
+rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 
 ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Cursor" - <<'EOF'
 const fs = require("fs");

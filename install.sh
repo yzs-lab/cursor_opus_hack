@@ -10,14 +10,16 @@ if [ ! -x "$APP/Contents/MacOS/Cursor" ]; then
   exit 1
 fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="$(command -v python3)" || { echo "需要 Python 3（仅使用标准库 sqlite3）。" >&2; exit 1; }
 
-ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Cursor" - "$APP" "$HERE/hook.js" <<'EOF'
+ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Cursor" - "$APP" "$HERE/hook.js" "$PYTHON" "$HERE/signature-overrides.py" <<'EOF'
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { pathToFileURL } = require("url");
+const { execFileSync } = require("child_process");
 
-const [app, hook] = process.argv.slice(2);
+const [app, hook, python, signatureHelper] = process.argv.slice(2);
 const id = "anysphere.cursor-always-local";
 const hookMain = "node_modules/hook/dist/main.js";
 const appRoot = path.join(app, "Contents/Resources/app");
@@ -29,6 +31,10 @@ const cache = path.join(os.homedir(), "Library/Application Support/Cursor/Cached
 // Generate and validate the model schema before updating the existing installation.
 const { generateResponseModule } = require(path.join(path.dirname(hook), "schema.js"));
 const modelSchema = generateResponseModule(appRoot);
+
+// Only this extension receives a signature exception. A missing exception may
+// be written only while Cursor is fully closed; an existing one is a read-only no-op.
+execFileSync(python, [signatureHelper, "install", "--app", app], { stdio: "inherit" });
 
 // A user-folder copy replaces the built-in extension only when its version is strictly higher.
 const manifest = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
